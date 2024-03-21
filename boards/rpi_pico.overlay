@@ -1,0 +1,81 @@
+&pinctrl{
+  pwm_7bp15: pwm_7bp15{ group1{ pinmux = <PWM_7B_P15>; }; };
+};
+
+&pwm{
+  status = "okay";
+  pinctrl-0 = <&pwm_7bp15>;
+  pinctrl-names = "default";
+  divider-int-7 = <1>;
+  divider-frac-7 = <0>;
+};
+
+&i2c0{
+  status = "disabled";
+};
+
+&pinctrl{
+  uart1_default: uart1_default{
+    group1{ pinmux = <UART1_TX_P4>; };
+    group2{ pinmux = <UART1_RX_P5>; input-enable;};
+  };
+};
+
+&uart1{
+  status = "okay";
+  current-speed = <115200>;
+  pinctrl-0 = <&uart1_default>;
+  pinctrl-names = "default";
+  modbus_server_lb: modbus_server{
+    compatible = "zephyr,modbus-serial";
+    status = "okay";
+  };
+};
+
+
+&i2c1{
+  status = "okay";
+  pinctrl-0 = <&i2c1_default>;
+  pinctrl-names = "default";
+  clock-frequency = <I2C_BITRATE_STANDARD>;
+
+  bmp280_tp@77{
+    compatible = "bosch,bme280";
+    reg = <0x77>;
+    status = "okay";
+  };
+
+};
+
+&uart0{
+  status = "okay";
+  current-speed = <115200>;
+  pinctrl-0 = <&uart0_default>;
+  pinctrl-names = "default";
+  modbus_client_lb: modbus_client{
+    compatible = "zephyr,modbus-serial";
+    status = "okay";
+  };
+};
+
+/{
+  valve_switch: valve_switch{
+    compatible = "power-switch";
+    gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+  };
+
+  servo: servo{
+    compatible = "pwm-servo";
+    status = "okay";
+    pwms = <&pwm 15 PWM_USEC(50) PWM_POLARITY_INVERTED>;
+    min-pulse = <PWM_USEC(10)>;
+    max-pulse = <PWM_USEC(50)>;
+  };
+
+  aliases {
+    modbus-client = &modbus_client_lb;
+    modbus-server = &modbus_server_lb;
+    switch0 = &valve_switch;
+    servo0 = &servo;
+  };
+};
