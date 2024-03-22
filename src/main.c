@@ -59,7 +59,7 @@ static int client_iface;
 
 const static struct modbus_iface_param client_accu_iface = {
   .mode = MODBUS_MODE_RTU,
-  .rx_timeout = 50000,
+  .rx_timeout = 500000,
   .serial = {
     .baud = 115200,
     .parity = UART_CFG_PARITY_NONE,
@@ -81,8 +81,10 @@ static int coil_rd(uint16_t addr, bool* state){
   LOG_INF("todo");
   return 0;
 }
+
 static int coil_wr(uint16_t addr, bool state){
   LOG_INF("todo");
+
   return 0;
 }
 
@@ -122,6 +124,8 @@ static int registers_write(uint16_t addr, uint16_t value){
       if (value==READ_CURRENT_FLOW){
         int ecode = 
           modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
+        //ecode = 
+        //  modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
         if (ecode!=0){ 
           LOG_ERR("current read failed");
           return -1;
@@ -150,7 +154,10 @@ static int registers_write(uint16_t addr, uint16_t value){
         }
         LOG_INF("reset total flow ok");
       }else if(value==SET_FLOW){
+        //LOG_INF("inter: SET_FLOW !!");
+
         int ec = modbus_write_holding_regs(client_iface,1,0x006a,modbus_registers+15,2);
+
         if (ec != 0){
           LOG_ERR("set flow failed");
           return -1;
@@ -173,7 +180,7 @@ static int registers_write(uint16_t addr, uint16_t value){
           return -1;
         }
         LOG_INF("valve_switch switch to 'INACTIVE' ok");
-        modbus_registers[18] = value;
+        //modbus_registers[18] = value;
       }
       else if(value==GPIO8_LOW){
         if (gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_ACTIVE)<0){
@@ -181,7 +188,8 @@ static int registers_write(uint16_t addr, uint16_t value){
           return -1;
         }
         LOG_INF("valve_switch switch to 'ACTIVE' ok");
-        modbus_registers[18] = value; }
+        //modbus_registers[18] = value;
+      }
       break;
     case(MODBUS_SEVER_FC_SET_SM):
       LOG_INF("MODBUS_SEVER_FC_SET_SM, value: %d",value);
