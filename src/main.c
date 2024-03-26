@@ -14,6 +14,7 @@ LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
 
+#define PWM_HALF_USEC(x) 500*PWM_NSEC(x)
 #define SET_LED 0x0000
 #define MODBUS_SEVER_FC_TEMP  0x0001
 #define MODBUS_SEVER_FC_PRESS 0x0005
@@ -95,11 +96,101 @@ static int registers_read(uint16_t addr, uint16_t* reg){
   return 0;
 }
 
+static int trans_to_dump_mode(){
+  //unable the pump
+  int ec = pwm_set_pulse_dt(&servo_st,0);
+  if (ec<0){
+    k_msleep(30);
+    if (pwm_set_pulse_dt(&servo_st,0)<0) return -1;
+  }
+  k_msleep(30);
+
+  uint16_t float40[2] = {0,16928};
+  ec = modbus_write_holding_regs(client_iface,1,0x006a,float40,2);
+  if (ec != 0){
+    k_msleep(200);
+    ec = modbus_read_holding_regs(client_iface,1,0x006a,float40,2);
+    if (ec!=0) return -2;
+  }
+
+  k_msleep(200);
+  ec = gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE);
+  if (ec<0){
+    k_msleep(30);
+    if(gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE)<0) return -3;
+  }
+  return 0;
+}
+
+static int trans_to_recycle_mode(){
+  int ec = gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_ACTIVE);
+  if (ec<0){
+    k_msleep(30);
+    if (gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_ACTIVE)<0) return -1;
+  }
+  k_msleep(30);
+
+  ec = pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(16));
+  if (ec<0){
+    k_msleep(30);
+    if (pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(13))<0) return -3;
+  }
+
+  k_msleep(1000);
+
+  uint16_t float0[2] = {0,0};
+  ec = modbus_write_holding_regs(client_iface,1,0x006a,float0,2);
+  if (ec != 0){
+    k_msleep(200);
+    ec = modbus_read_holding_regs(client_iface,1,0x006a,float0,2);
+    if (ec !=0) return -2; }
+  return 0;
+
+}
+
+static int upload_data(){
+}
+
+static int self_cycle_mode(){
+
+  LOG_INF("Poll Mode!");
+  int ec = trans_to_dump_mode();
+  k_msleep(2000);
+
+  for (int i=0; i<1000; ++i){
+    LOG_INF("Period %d Start",i);
+    ec = trans_to_dump_mode();
+    if (ec != 0){
+      LOG_WRN("%d Cycle, Failed in 'trans_to_dump_mode'", i);
+      break;
+    }else LOG_INF("==> Dump Mode");
+
+    for (int j=0; j<8; ++j){
+      if (j==3){ 
+        if (trans_to_recycle_mode()!=0){
+          LOG_INF("%d Cycle, failed in 'trans_to_recycle_mode'",i);
+          break;
+        }else{
+          LOG_INF("===> Recycle Mode");
+          continue;
+        }
+      }
+      k_msleep(5000); LOG_INF("---");
+
+    }
+  }
+  return 0;
+}
+
+
+
 static int registers_write(uint16_t addr, uint16_t value){
   switch(addr){
     case(SET_LED):
       if (value==0) gpio_pin_configure_dt(&led,GPIO_OUTPUT_INACTIVE);
       else if (value==1) gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
+      else if (value==2){
+      }
       modbus_registers[0] = value;
       break;
     case(MODBUS_SEVER_FC_TEMP):
@@ -193,15 +284,16 @@ static int registers_write(uint16_t addr, uint16_t value){
       break;
     case(MODBUS_SEVER_FC_SET_SM):
       LOG_INF("MODBUS_SEVER_FC_SET_SM, value: %d",value);
-      pwm_set_pulse_dt(&servo_st,PWM_USEC(value/2));
-      k_msleep(1000);
+      //pwm_set_pulse_dt(&servo_st,PWM_USEC(value/2));
+      pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(value));
+      k_msleep(50);
       //modbus_registers[19] = value;
       //if (pwm_set_pulse_dt(&servo_st,value/2)<0){
       //  LOG_ERR("servo_motor's pluse be set to %ld failed",PWM_USEC(value/2));
       //  return -1;
       //}
       //pwm_set_pulse_dt(&servo_st,50);
-      LOG_INF("servo_motor's pluse be set to %ld ok",PWM_USEC(value/2));
+      LOG_INF("servo_motor's pluse be set to %d ok",PWM_HALF_USEC(value));
     break;
     default:
       LOG_INF("unknow command %d",addr);
@@ -315,6 +407,9 @@ int main(void){
 
   LOG_INF("all is ok, blink the LED");
   gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
+
+
+  self_cycle_mode();
 
   return 0;
 
