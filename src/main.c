@@ -8,7 +8,15 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/pwm.h>
-#include <stdio.h>
+
+#include <errno.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <zephyr/sys/slist.h>
+
+static sys_slist_t data_block = SYS_SLIST_STATIC_INIT(&data_block);
 
 LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
@@ -148,8 +156,8 @@ static int trans_to_recycle_mode(){
 
 }
 
-static int upload_data(){
-}
+//static int upload_data(){
+//}
 
 static int self_cycle_mode(){
 
@@ -157,8 +165,14 @@ static int self_cycle_mode(){
   int ec = trans_to_dump_mode();
   k_msleep(2000);
 
-  for (int i=0; i<1000; ++i){
-    LOG_INF("Period %d Start",i);
+  //for (int i=0; i<1000; ++i){
+  size_t i = 1;
+  struct timeval tv;
+  while(1){
+    gettimeofday(&tv,NULL);
+    LOG_INF("[%d %d %d] Period %d Start. slist size %d"
+        ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
+        ,i++,sys_slist_len(&data_block));
     ec = trans_to_dump_mode();
     if (ec != 0){
       LOG_WRN("%d Cycle, Failed in 'trans_to_dump_mode'", i);
@@ -166,6 +180,8 @@ static int self_cycle_mode(){
     }else LOG_INF("==> Dump Mode");
 
     for (int j=0; j<8; ++j){
+      sys_snode_t* node;
+      sys_slist_append(&data_block,node);
       if (j==3){ 
         if (trans_to_recycle_mode()!=0){
           LOG_INF("%d Cycle, failed in 'trans_to_recycle_mode'",i);
@@ -175,15 +191,18 @@ static int self_cycle_mode(){
           continue;
         }
       }
-      k_msleep(5000); LOG_INF("---");
-
+      k_msleep(4700);
+      ec = modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
+      if (ec!=0){
+        k_msleep(200);
+        if (modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2)!=0)
+          modbus_registers[10] = modbus_registers[11] = 0xFFFF;
+        continue; }
     }
   }
   return 0;
 }
-
-
-
+//---------------------------------------------------------------------
 static int registers_write(uint16_t addr, uint16_t value){
   switch(addr){
     case(SET_LED):
@@ -408,6 +427,19 @@ int main(void){
   LOG_INF("all is ok, blink the LED");
   gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
 
+
+  //struct timeval tv;
+  //gettimeofday(&tv,NULL);
+  ////time_t now = time(NULL);
+  //LOG_INF("HI(tv_sec)=%d, LO(tv_sec)=%d, tv_usec=%d"
+  //    ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec);
+
+  //for (int i=0; i<10; ++i){
+  //  LOG_INF("sys_slist_t: %d",sys_slist_len(&data_block));
+  //  k_msleep(500);
+  //  //sys_slist_peek_tail(sys_slist_t *list)
+  //  sys_slist_append(&data_block,node);
+  //}
 
   self_cycle_mode();
 
