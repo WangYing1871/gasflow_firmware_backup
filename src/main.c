@@ -16,6 +16,8 @@
 
 #include <zephyr/sys/slist.h>
 
+struct k_timer timer_updata;
+struct k_timer timer_period;
 static sys_slist_t data_block = SYS_SLIST_STATIC_INIT(&data_block);
 
 LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
@@ -23,6 +25,11 @@ static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
 
 #define PWM_HALF_USEC(x) 500*PWM_NSEC(x)
+
+#define PERIOD_TIME 50000
+#define DUMP_TIME PERIOD_TIME/5
+#define UPDATE_TIME 5000
+
 #define SET_LED 0x0000
 #define MODBUS_SEVER_FC_TEMP  0x0001
 #define MODBUS_SEVER_FC_PRESS 0x0005
@@ -117,8 +124,11 @@ static int trans_to_dump_mode(){
   ec = modbus_write_holding_regs(client_iface,1,0x006a,float40,2);
   if (ec != 0){
     k_msleep(200);
-    ec = modbus_read_holding_regs(client_iface,1,0x006a,float40,2);
-    if (ec!=0) return -2;
+    ec = modbus_write_holding_regs(client_iface,1,0x006a,float40,2);
+    if (ec!=0){
+      gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE);
+      return -2;
+    }
   }
 
   k_msleep(200);
@@ -156,8 +166,30 @@ static int trans_to_recycle_mode(){
 
 }
 
-//static int upload_data(){
-//}
+static void upload_data(struct k_timer* timer){
+  LOG_INF("update data");
+  struct sensor_value value;
+  sensor_sample_fetch(bmp280);
+  sensor_channel_get(bmp280,SENSOR_CHAN_AMBIENT_TEMP,&value);
+  modbus_registers[2] = value.val1;
+  modbus_registers[3] = (uint16_t)(value.val2>>16);
+  modbus_registers[4] = (uint16_t)(value.val2 & 0xFFFF);
+  k_msleep(25);
+  sensor_channel_get(bmp280,SENSOR_CHAN_PRESS,&value);
+  modbus_registers[6] = value.val1;
+  modbus_registers[7] = (uint16_t)(value.val2>>16);
+  modbus_registers[8] = (uint16_t)(value.val2 & 0xFFFF);
+  k_msleep(25);
+  modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
+  k_msleep(250);
+  modbus_read_holding_regs(client_iface,1,0x001c,modbus_registers+12,2);
+}
+
+static void self_cycle(struct k_timer* timer){
+  trans_to_dump_mode();
+  k_msleep(DUMP_TIME);
+  trans_to_recycle_mode();
+}
 
 static int self_cycle_mode(){
 
@@ -166,6 +198,9 @@ static int self_cycle_mode(){
   k_msleep(2000);
 
   //for (int i=0; i<1000; ++i){
+  //k_timer_start(&timer_period,K_MSEC(PERIOD_TIME),K_MSEC(PERIOD_TIME));
+  //k_timer_start(&timer_updata,K_MSEC(UPDATE_TIME),K_MSEC(UPDATE_TIME));
+
   size_t i = 1;
   struct timeval tv;
   while(1){
@@ -173,31 +208,45 @@ static int self_cycle_mode(){
     LOG_INF("[%d %d %d] Period %d Start. slist size %d"
         ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
         ,i++,sys_slist_len(&data_block));
+
     ec = trans_to_dump_mode();
     if (ec != 0){
       LOG_WRN("%d Cycle, Failed in 'trans_to_dump_mode'", i);
       break;
     }else LOG_INF("==> Dump Mode");
 
-    for (int j=0; j<8; ++j){
-      sys_snode_t* node;
-      sys_slist_append(&data_block,node);
-      if (j==3){ 
-        if (trans_to_recycle_mode()!=0){
-          LOG_INF("%d Cycle, failed in 'trans_to_recycle_mode'",i);
-          break;
-        }else{
-          LOG_INF("===> Recycle Mode");
-          continue;
-        }
-      }
-      k_msleep(4700);
-      ec = modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
-      if (ec!=0){
-        k_msleep(200);
-        if (modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2)!=0)
-          modbus_registers[10] = modbus_registers[11] = 0xFFFF;
-        continue; }
+    for (int j=0; j<20; ++j){
+      //sys_snode_t* node;
+      //sys_slist_append(&data_block,node);
+
+      //if (j==4){ 
+      //  if (trans_to_recycle_mode()!=0){
+      //    LOG_INF("%d Cycle, failed in 'trans_to_recycle_mode'",i);
+      //    break;
+      //  }else{
+      //    LOG_INF("===> Recycle Mode");
+      //    continue;
+      //  }
+      //}
+
+      k_msleep(4500);
+      upload_data(NULL);
+      k_msleep(200);
+      //ec = modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
+      //if (ec!=0){
+      //  k_msleep(200);
+      //  if (modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2)!=0)
+      //    modbus_registers[10] = modbus_registers[11] = 0xFFFF;
+      //  continue;
+      //}
+      //k_msleep(500);
+      //ec = modbus_read_holding_regs(client_iface,1,0x001c,modbus_registers+12,2);
+      //if (ec!=0){
+      //  k_msleep(200);
+      //  if(modbus_read_holding_regs(client_iface,1,0x001c,modbus_registers+12,2)!=0)
+      //    modbus_registers[12] = modbus_registers[13] = 0xFFFF;
+      //  continue;
+      //}
     }
   }
   return 0;
@@ -424,6 +473,8 @@ int main(void){
   LOG_INF("set flowmeter mode as 'digit'");
 
 
+  k_timer_init(&timer_updata,&upload_data,NULL);
+  k_timer_init(&timer_period,&self_cycle,NULL);
   LOG_INF("all is ok, blink the LED");
   gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
 
