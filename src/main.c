@@ -43,6 +43,12 @@ static uint8_t __attribute__((unused)) modbus_coils;
 #define MODBUS_SEVER_FC_SET_VSWITCH 0x0012
 #define MODBUS_SEVER_FC_SET_SM 0x0013
 
+#define MODE_SET_P0 0x0014
+#define MODE_SET_P1 MODE_SET_P0+1
+#define MODE_SET_P2 MODE_SET_P0+2
+#define MODE_SET_P3 MODE_SET_P0+3
+#define MODE_SET    MODE_SET_P0+4
+
 #define READ_CURRENT_FLOW 0x0000
 #define READ_TOTAL_FLOW 0x0001
 #define SET_FLOW 0x0000
@@ -111,7 +117,7 @@ static int registers_read(uint16_t addr, uint16_t* reg){
   return 0;
 }
 
-static int trans_to_dump_mode(){
+static int trans_to_dump_mode(uint16_t low, uint16_t high){
   //unable the pump
   int ec = pwm_set_pulse_dt(&servo_st,0);
   if (ec<0){
@@ -120,11 +126,11 @@ static int trans_to_dump_mode(){
   }
   k_msleep(30);
 
-  uint16_t float40[2] = {0,16928};
-  ec = modbus_write_holding_regs(client_iface,1,0x006a,float40,2);
+  uint16_t float_toset[2] = {low,high};
+  ec = modbus_write_holding_regs(client_iface,1,0x006a,float_toset,2);
   if (ec != 0){
     k_msleep(200);
-    ec = modbus_write_holding_regs(client_iface,1,0x006a,float40,2);
+    ec = modbus_write_holding_regs(client_iface,1,0x006a,float_toset,2);
     if (ec!=0){
       gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE);
       return -2;
@@ -148,13 +154,13 @@ static int trans_to_recycle_mode(){
   }
   k_msleep(30);
 
-  ec = pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(16));
+  ec = pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(14));
   if (ec<0){
     k_msleep(30);
-    if (pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(13))<0) return -3;
+    if (pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(14))<0) return -3;
   }
 
-  k_msleep(1000);
+  k_msleep(200);
 
   uint16_t float0[2] = {0,0};
   ec = modbus_write_holding_regs(client_iface,1,0x006a,float0,2);
@@ -186,7 +192,7 @@ static void upload_data(struct k_timer* timer){
 }
 
 static void self_cycle(struct k_timer* timer){
-  trans_to_dump_mode();
+  trans_to_dump_mode(0,16928);
   k_msleep(DUMP_TIME);
   trans_to_recycle_mode();
 }
@@ -194,8 +200,8 @@ static void self_cycle(struct k_timer* timer){
 static int self_cycle_mode(){
 
   LOG_INF("Poll Mode!");
-  int ec = trans_to_dump_mode();
-  k_msleep(2000);
+  //int ec = trans_to_dump_mode(modbus_registers[MODE_SET_P0],modbus_registers[MODE_SET_P1]);
+  //k_msleep(2000);
 
   //for (int i=0; i<1000; ++i){
   //k_timer_start(&timer_period,K_MSEC(PERIOD_TIME),K_MSEC(PERIOD_TIME));
@@ -205,49 +211,25 @@ static int self_cycle_mode(){
   struct timeval tv;
   while(1){
     gettimeofday(&tv,NULL);
-    LOG_INF("[%d %d %d] Period %d Start. slist size %d"
+    LOG_INF("[%d %d %d] period %d start."
         ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
-        ,i++,sys_slist_len(&data_block));
+        ,i++);
 
-    ec = trans_to_dump_mode();
+    int ec = trans_to_dump_mode(modbus_registers[MODE_SET_P2],modbus_registers[MODE_SET_P3]);
     if (ec != 0){
-      LOG_WRN("%d Cycle, Failed in 'trans_to_dump_mode'", i);
-      break;
-    }else LOG_INF("==> Dump Mode");
-
-    for (int j=0; j<20; ++j){
-      //sys_snode_t* node;
-      //sys_slist_append(&data_block,node);
-
-      //if (j==4){ 
-      //  if (trans_to_recycle_mode()!=0){
-      //    LOG_INF("%d Cycle, failed in 'trans_to_recycle_mode'",i);
-      //    break;
-      //  }else{
-      //    LOG_INF("===> Recycle Mode");
-      //    continue;
-      //  }
-      //}
-
-      k_msleep(4500);
-      upload_data(NULL);
-      k_msleep(200);
-      //ec = modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2);
-      //if (ec!=0){
-      //  k_msleep(200);
-      //  if (modbus_read_holding_regs(client_iface,1,0x0010,modbus_registers+10,2)!=0)
-      //    modbus_registers[10] = modbus_registers[11] = 0xFFFF;
-      //  continue;
-      //}
-      //k_msleep(500);
-      //ec = modbus_read_holding_regs(client_iface,1,0x001c,modbus_registers+12,2);
-      //if (ec!=0){
-      //  k_msleep(200);
-      //  if(modbus_read_holding_regs(client_iface,1,0x001c,modbus_registers+12,2)!=0)
-      //    modbus_registers[12] = modbus_registers[13] = 0xFFFF;
-      //  continue;
-      //}
+      LOG_WRN("%d loop, Failed in 'trans_to_dump_mode'", i);
+      continue;
     }
+    LOG_INF("===> dump mode");
+
+    k_msleep(modbus_registers[MODE_SET_P0]);
+    ec = trans_to_recycle_mode();
+    if (ec != 0){
+      LOG_WRN("%d loop, Failed in 'trans_to_recycle_mode'", i);
+      continue;
+    }
+    LOG_INF("===> recycle mode");
+    k_msleep(modbus_registers[MODE_SET_P1]-modbus_registers[MODE_SET_P0]);
   }
   return 0;
 }
@@ -257,8 +239,6 @@ static int registers_write(uint16_t addr, uint16_t value){
     case(SET_LED):
       if (value==0) gpio_pin_configure_dt(&led,GPIO_OUTPUT_INACTIVE);
       else if (value==1) gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
-      else if (value==2){
-      }
       modbus_registers[0] = value;
       break;
     case(MODBUS_SEVER_FC_TEMP):
@@ -354,7 +334,6 @@ static int registers_write(uint16_t addr, uint16_t value){
       LOG_INF("MODBUS_SEVER_FC_SET_SM, value: %d",value);
       //pwm_set_pulse_dt(&servo_st,PWM_USEC(value/2));
       pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(value));
-      k_msleep(50);
       //modbus_registers[19] = value;
       //if (pwm_set_pulse_dt(&servo_st,value/2)<0){
       //  LOG_ERR("servo_motor's pluse be set to %ld failed",PWM_USEC(value/2));
@@ -362,7 +341,46 @@ static int registers_write(uint16_t addr, uint16_t value){
       //}
       //pwm_set_pulse_dt(&servo_st,50);
       LOG_INF("servo_motor's pluse be set to %d ok",PWM_HALF_USEC(value));
-    break;
+      break;
+
+    case(MODE_SET_P0): modbus_registers[MODE_SET_P0] = value; break;
+    case(MODE_SET_P1): modbus_registers[MODE_SET_P1] = value; break;
+    case(MODE_SET_P2): modbus_registers[MODE_SET_P2] = value; break;
+    case(MODE_SET_P3): modbus_registers[MODE_SET_P3] = value; break;
+    case(MODE_SET):
+      if (value==0){
+        int ec = trans_to_recycle_mode();
+        LOG_INF("mode set: recycle, return status: %d",ec);
+        break;
+      }else if(value==1){
+        int ec = trans_to_dump_mode(modbus_registers[MODE_SET_P2],modbus_registers[MODE_SET_P3]);
+        LOG_INF("mode set: dump, return status: %d",ec);
+        break;
+      }else if(value==2){
+        self_cycle_mode();
+        LOG_INF("mode set: self_cycle");
+        break;
+      }
+      break;
+    /*
+    case(MODBUS_SEVER_FC_SET_SM+1):
+      LOG_INF("MODBUS_SEVER_FC_SET_SM+1");
+      break;
+    case(MODBUS_SEVER_FC_SET_SM+2):
+      LOG_INF("MODBUS_SEVER_FC_SET_SM+2");
+      break;
+    case(MODBUS_SEVER_FC_SET_SM+3):
+      LOG_INF("MODBUS_SEVER_FC_SET_SM+3");
+      break;
+    case(MODBUS_SEVER_FC_SET_SM+4):
+      LOG_INF("MODBUS_SEVER_FC_SET_SM+4");
+      break;
+    case(MODE_SET):
+      LOG_INF("MODBUS_SEVER_FC_SET_SM+5");
+      break;
+      */
+
+
     default:
       LOG_INF("unknow command %d",addr);
       break;
@@ -492,7 +510,7 @@ int main(void){
   //  sys_slist_append(&data_block,node);
   //}
 
-  self_cycle_mode();
+  //self_cycle_mode();
 
   return 0;
 
