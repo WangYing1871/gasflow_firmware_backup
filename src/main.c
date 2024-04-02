@@ -20,6 +20,27 @@ struct k_timer timer_updata;
 struct k_timer timer_period;
 static sys_slist_t data_block = SYS_SLIST_STATIC_INIT(&data_block);
 
+#define STACK0_SIZE 512
+#define PRIORITY0 5
+K_THREAD_STACK_DEFINE(stack0_area,STACK0_SIZE)
+struct k_work_q my_work_q;
+
+
+#define _STACK_SIZE 512
+#define MY_PRIORITY 5
+
+K_THREAD_STACK_DEFINE(my_stack_area, MY_STACK_SIZE);
+
+struct k_work_q my_work_q;
+
+k_work_queue_init(&my_work_q);
+
+k_work_queue_start(&my_work_q, my_stack_area,
+                   K_THREAD_STACK_SIZEOF(my_stack_area), MY_PRIORITY,
+                   NULL);
+
+
+
 LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
