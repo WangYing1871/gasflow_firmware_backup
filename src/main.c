@@ -14,6 +14,8 @@ LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
 
+#define PWM_HALF_USEC(x) 500*(x)
+
 #define SET_LED 0x0000
 #define MODBUS_SEVER_FC_TEMP  0x0001
 #define MODBUS_SEVER_FC_PRESS 0x0005
@@ -256,6 +258,92 @@ static const struct device* get_bmp280_device(void){
   return dev;
 #endif
 }
+
+
+
+//---------------------------------------------------------------------
+static int trans_to_recycle_mode(){
+  int ec = gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_ACTIVE);
+  if (ec<0){
+    k_msleep(30);
+    if (gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_ACTIVE)<0) return -1;
+  }
+  k_msleep(30);
+
+  ec = pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(14));
+  if (ec<0){
+    k_msleep(30);
+    if (pwm_set_pulse_dt(&servo_st,PWM_HALF_USEC(14))<0) return -3;
+  }
+
+  k_msleep(200);
+
+  uint16_t float0[2] = {0,0};
+  ec = modbus_write_holding_regs(client_iface,1,0x006a,float0,2);
+  if (ec != 0){
+    k_msleep(200);
+    ec = modbus_read_holding_regs(client_iface,1,0x006a,float0,2);
+    if (ec !=0) return -2; }
+  return 0;
+
+}
+static int trans_to_dump_mode(){
+  int ec = pwm_set_pulse_dt(&servo_st,0);
+  if (ec<0){
+    k_msleep(30);
+    if (pwm_set_pulse_dt(&servo_st,0)<0) return -1;
+  }
+  k_msleep(30);
+
+  uint16_t float_toset[2] = {0,16880}; //40.
+  ec = modbus_write_holding_regs(client_iface,1,0x006a,float_toset,2);
+  if (ec != 0){
+    k_msleep(200);
+    ec = modbus_write_holding_regs(client_iface,1,0x006a,float_toset,2);
+    if (ec!=0){
+      gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE);
+      return -2;
+    }
+  }
+
+  k_msleep(200);
+  ec = gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE);
+  if (ec<0){
+    k_msleep(30);
+    if(gpio_pin_configure_dt(&valve_switch,GPIO_OUTPUT_INACTIVE)<0) return -3;
+  }
+  return 0;
+}
+
+static int self_cycle_mode(){
+
+  LOG_INF("Poll Mode!");
+
+  size_t i = 1;
+  while(1){
+    LOG_INF("period %d start" ,i++);
+
+    int ec = trans_to_dump_mode();
+    if (ec != 0){
+      LOG_WRN("%d loop, Failed in 'trans_to_dump_mode'", i);
+      continue;
+    }
+    LOG_INF("===> dump mode");
+
+    k_msleep(60*1000);
+    ec = trans_to_recycle_mode();
+    if (ec != 0){
+      LOG_WRN("%d loop, Failed in 'trans_to_recycle_mode'", i);
+      continue;
+    }
+    LOG_INF("===> recycle mode");
+    k_msleep(240*1000);
+  }
+  return 0;
+}
+//---------------------------------------------------------------------
+
+
 int main(void){
 
   for (size_t i=0; i<32; i++) modbus_registers[i] = 0x00;
@@ -315,6 +403,10 @@ int main(void){
 
   LOG_INF("all is ok, blink the LED");
   gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
+
+  self_cycle_mode();
+
+
 
   return 0;
 
