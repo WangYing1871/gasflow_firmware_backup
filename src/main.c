@@ -10,9 +10,55 @@
 #include <zephyr/drivers/pwm.h>
 #include <stdio.h>
 
+#include <errno.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+#include <pthread.h>
+
 LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
+
+#define MY_STACK_SIZE 512
+#define MY_PRIORITY 5
+K_THREAD_STACK_DEFINE(my_stack_area, MY_STACK_SIZE);
+static struct k_work_q my_work_q;
+
+
+
+struct period_task{
+  struct k_timer timer;
+  struct k_work work;
+  k_work_handler_t task;
+  struct k_work_q* work_queue;
+};
+
+extern void period_task_adaptor(struct k_timer* T){
+  struct period_task* task = CONTAINER_OF(T,struct period_task,timer);
+  if (task->work_queue==NULL)
+    k_work_submit(&task->work);
+  else
+    k_work_submit(&task->work);
+    //k_work_submit_to_queue(task->work_queue,&task->work);
+}
+
+void init_pt(struct period_task* T,k_work_handler_t handler,struct k_work_q* wq){
+  k_timer_init(&T->timer,period_task_adaptor,NULL);
+  T->task = handler;
+  //T->work_queue = wq;
+  k_work_init(&T->work,T->task);
+}
+
+void start_pt(struct period_task* T,k_timeout_t duration,k_timeout_t period){
+  k_timer_start(&T->timer,duration,period);
+}
+
+
+
+struct k_timer timer_updata;
+struct k_timer timer_period;
+
 
 #define PWM_HALF_USEC(x) 500*(x)
 
@@ -58,6 +104,81 @@ static const struct gpio_dt_spec valve_switch =
 
 static const struct device* bmp280;
 static int client_iface;
+
+struct sensors_msg{
+  uint16_t temprature[3];
+  uint16_t pressure[3];
+  uint16_t humidity[3];
+  uint8_t valve_switch;
+  uint16_t pump;
+  uint16_t mcf_current[2];
+  uint16_t mcf_total[2];
+};
+#include <zephyr/zbus/zbus.h>
+ZBUS_CHAN_DECLARE(sensors_data_update);
+void peripheral_thread(void){
+  struct sensors_msg sm = {0};
+  while(1){
+    LOG_INF("my_thread");
+    LOG_INF("my thread. bmp: %d",POINTER_TO_INT(bmp280));
+
+
+    //for (int i=0; i<3; ++i) sm.temprature[i]++;
+    //for (int i=0; i<3; ++i) sm.pressure[i]++;
+    //for (int i=0; i<3; ++i) sm.humidity[i]++;
+    zbus_chan_pub(&sensors_data_update,&sm,K_MSEC(200));
+    k_msleep(2000);
+
+  }
+
+
+}
+K_THREAD_DEFINE(peripheral_thread_id,1024,peripheral_thread,NULL,NULL,NULL,5,0,0);
+
+
+struct sensor_wq_info{
+  struct k_work work;
+  const struct zbus_channel* chan;
+  uint8_t handle;
+};
+static struct sensor_wq_info wq_handler1 = {.handle = 1};
+static struct sensor_wq_info wq_handler2 = {.handle = 2};
+static struct sensor_wq_info wq_handler3 = {.handle = 3};
+
+static void wq_dh_cb(struct k_work* item){
+  struct sensors_msg msg;
+  struct sensor_wq_info* sens = 
+    CONTAINER_OF(item,struct sensor_wq_info,work);
+  zbus_chan_read(sens->chan,&msg,K_MSEC(1000));
+  LOG_INF("wangying sen handle %d",sens->handle);
+  
+}
+static void dh1_cb(const struct zbus_channel* chan){
+  wq_handler1.chan = chan;
+  k_work_submit(&wq_handler1.work); }
+static void dh2_cb(const struct zbus_channel* chan){
+  wq_handler2.chan = chan;
+  k_work_submit(&wq_handler2.work); }
+static void dh3_cb(const struct zbus_channel* chan){
+  LOG_INF("dh3_cb");
+  wq_handler3.chan = chan;
+  k_work_submit(&wq_handler3.work); }
+
+ZBUS_LISTENER_DEFINE(delay_handler1_lis,dh1_cb);
+ZBUS_LISTENER_DEFINE(delay_handler2_lis,dh2_cb);
+ZBUS_LISTENER_DEFINE(delay_handler3_lis,dh3_cb);
+ZBUS_CHAN_DEFINE(sensors_data_update
+    ,struct sensors_msg
+    ,NULL
+    ,NULL
+    ,ZBUS_OBSERVERS(
+      delay_handler1_lis
+      ,delay_handler2_lis
+      ,delay_handler3_lis
+      )
+    ,ZBUS_MSG_INIT(0));
+
+
 
 const static struct modbus_iface_param client_accu_iface = {
   .mode = MODBUS_MODE_RTU,
@@ -342,10 +463,30 @@ static int self_cycle_mode(){
   return 0;
 }
 //---------------------------------------------------------------------
+void AAA_WK(struct k_work* item){
+  struct timeval tv;
+  gettimeofday(&tv,NULL);
+  LOG_INF("AAA_WK %d %d %d, thread: %d"
+      ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
+      ,pthread_self()); }
+void BBB_WK(struct k_work* item){
+  struct timeval tv;
+  gettimeofday(&tv,NULL);
+  LOG_INF("BBB_WK %d %d %d, thread: %d"
+      ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
+      ,pthread_self()); }
+void CCC_WK(struct k_work* item){
+  struct timeval tv;
+  gettimeofday(&tv,NULL);
+  LOG_INF("CCC_WK %d %d %d, thread: %d"
+      ,(unsigned int)(tv.tv_sec>>32),(unsigned int)tv.tv_sec,(unsigned int)tv.tv_usec
+      ,pthread_self()); }
+//---------------------------------------------------------------------
+
 
 
 int main(void){
-
+  LOG_INF("program init");
   for (size_t i=0; i<32; i++) modbus_registers[i] = 0x00;
   modbus_registers[10] = modbus_registers[11] = 0xFFFF;
   modbus_registers[12] = modbus_registers[13] = 0xFFFF;
@@ -391,6 +532,10 @@ int main(void){
   //LOG_INF("modbus rtu server initialization ok");
   modbus_registers[14] |= 0b01000000;
 
+  k_work_init(&wq_handler1.work,wq_dh_cb);
+  k_work_init(&wq_handler2.work,wq_dh_cb);
+  k_work_init(&wq_handler3.work,wq_dh_cb);
+
   k_msleep(200);
   uint16_t digit_mode_command[2] = {0x0000,0x41D0};
   if (modbus_write_holding_regs(client_iface,1,0x0074,digit_mode_command,2)!=0){
@@ -405,7 +550,54 @@ int main(void){
   gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
 
   self_cycle_mode();
+  /*
+  */
 
+  /*
+  k_work_queue_init(&my_work_q);
+  k_work_queue_start(&my_work_q
+      ,my_stack_area
+      ,K_THREAD_STACK_SIZEOF(my_stack_area)
+      ,MY_PRIORITY
+      ,NULL);
+  struct period_task task0; init_pt(&task0,AAA_WK,NULL);
+  //struct period_task task1; init_pt(&task1,BBB_WK);
+  //struct period_task task2; init_pt(&task2,CCC_WK);
+
+  start_pt(&task0,K_MSEC(1000),K_MSEC(1000));
+  //start_pt(&task1,K_MSEC(2000),K_MSEC(2000));
+  //start_pt(&task2,K_MSEC(4000),K_MSEC(4000));
+  */
+  
+  
+
+
+//  struct device_info {
+//    struct k_work work;
+//    char name[16]
+//} my_device;
+//
+//void my_isr(void *arg)
+//{
+//    ...
+//    if (error detected) {
+//        k_work_submit(&my_device.work);
+//    }
+//    ...
+//}
+//
+//void print_error(struct k_work *item)
+//{
+//    struct device_info *the_device =
+//        CONTAINER_OF(item, struct device_info, work);
+//    printk("Got error on device %s\n", the_device->name);
+//}
+//
+///* initialize name info for a device */
+//strcpy(my_device.name, "FOO_dev");
+//
+///* initialize work item for printing device's error messages */
+//k_work_init(&my_device.work, print_error);
 
 
   return 0;
