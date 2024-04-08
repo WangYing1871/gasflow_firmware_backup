@@ -103,24 +103,35 @@ static const struct gpio_dt_spec valve_switch =
   GPIO_DT_SPEC_GET_OR(DT_NODELABEL(valve_switch),gpios,{0});
 
 static const struct device* bmp280;
+static const struct device* aht20;
 static int client_iface;
 
 struct sensors_msg{
-  uint16_t temprature[3];
-  uint16_t pressure[3];
-  uint16_t humidity[3];
-  uint8_t valve_switch;
-  uint16_t pump;
-  uint16_t mcf_current[2];
-  uint16_t mcf_total[2];
+  uint16_t data[15];
 };
+
+static struct sensors_msg monitor = {0};
 #include <zephyr/zbus/zbus.h>
 ZBUS_CHAN_DECLARE(sensors_data_update);
 void peripheral_thread(void){
   struct sensors_msg sm = {0};
   while(1){
-    LOG_INF("my_thread");
-    LOG_INF("my thread. bmp: %d",POINTER_TO_INT(bmp280));
+    struct sensor_value value;
+    sensor_sample_fetch(bmp280);
+    sensor_channel_get(bmp280,SENSOR_CHAN_AMBIENT_TEMP,&value);
+    sm.data[0] = value.val1;
+    sm.data[1] = (uint16_t)(value.val2>>16);
+    sm.data[2] = (uint16_t)(value.val2 & 0xFFFF);
+    k_msleep(10);
+    sensor_channel_get(bmp280,SENSOR_CHAN_PRESS,&value);
+    sm.data[3] = value.val1;
+    sm.data[4] = (uint16_t)(value.val2>>16);
+    sm.data[5] = (uint16_t)(value.val2 & 0xFFFF);
+    k_msleep(30);
+    modbus_read_holding_regs(client_iface,1,0x0010,sm.data+11,2);
+
+    //LOG_INF("my_thread");
+    //LOG_INF("my thread. bmp: %d",POINTER_TO_INT(bmp280));
 
 
     //for (int i=0; i<3; ++i) sm.temprature[i]++;
@@ -144,15 +155,45 @@ struct sensor_wq_info{
 static struct sensor_wq_info wq_handler1 = {.handle = 1};
 static struct sensor_wq_info wq_handler2 = {.handle = 2};
 static struct sensor_wq_info wq_handler3 = {.handle = 3};
+static struct sensor_wq_info wq_handler4 = {.handle = 4};
 
-static void wq_dh_cb(struct k_work* item){
+static void wq_dh_cb1(struct k_work* item){
   struct sensors_msg msg;
   struct sensor_wq_info* sens = 
     CONTAINER_OF(item,struct sensor_wq_info,work);
-  zbus_chan_read(sens->chan,&msg,K_MSEC(1000));
-  LOG_INF("wangying sen handle %d",sens->handle);
-  
+  zbus_chan_read(sens->chan,&msg,K_MSEC(200));
+  LOG_INF("sen handle(T) %d %d %d %d",sens->handle
+      ,msg.data[0] ,msg.data[1] ,msg.data[2]); }
+static void wq_dh_cb2(struct k_work* item){
+  struct sensors_msg msg;
+  struct sensor_wq_info* sens = 
+    CONTAINER_OF(item,struct sensor_wq_info,work);
+  zbus_chan_read(sens->chan,&msg,K_MSEC(200));
+  LOG_INF("sen handle(P) %d %d %d %d",sens->handle
+      ,msg.data[3] ,msg.data[4] ,msg.data[5]); }
+static void wq_dh_cb3(struct k_work* item){
+  struct sensors_msg msg;
+  struct sensor_wq_info* sens = 
+    CONTAINER_OF(item,struct sensor_wq_info,work);
+  zbus_chan_read(sens->chan,&msg,K_MSEC(200));
+  LOG_INF("sen handle(MFC-PV) %d %d %d",sens->handle
+      ,msg.data[11],msg.data[12]); }
+
+static void wq_dh_cb4(struct k_work* item){
+  struct sensors_msg msg;
+  struct sensor_wq_info* sens = 
+    CONTAINER_OF(item,struct sensor_wq_info,work);
+  zbus_chan_read(sens->chan,&msg,K_MSEC(200));
+  for (int i=0; i<ARRAY_SIZE(monitor.data); ++i)
+    monitor.data[i] = msg.data[i];
+
 }
+
+
+
+
+
+
 static void dh1_cb(const struct zbus_channel* chan){
   wq_handler1.chan = chan;
   k_work_submit(&wq_handler1.work); }
@@ -160,13 +201,16 @@ static void dh2_cb(const struct zbus_channel* chan){
   wq_handler2.chan = chan;
   k_work_submit(&wq_handler2.work); }
 static void dh3_cb(const struct zbus_channel* chan){
-  LOG_INF("dh3_cb");
   wq_handler3.chan = chan;
   k_work_submit(&wq_handler3.work); }
+static void dh4_cb(const struct zbus_channel* chan){
+  wq_handler4.chan = chan;
+  k_work_submit(&wq_handler4.work); }
 
 ZBUS_LISTENER_DEFINE(delay_handler1_lis,dh1_cb);
 ZBUS_LISTENER_DEFINE(delay_handler2_lis,dh2_cb);
 ZBUS_LISTENER_DEFINE(delay_handler3_lis,dh3_cb);
+ZBUS_LISTENER_DEFINE(delay_handler4_lis,dh4_cb);
 ZBUS_CHAN_DEFINE(sensors_data_update
     ,struct sensors_msg
     ,NULL
@@ -175,6 +219,7 @@ ZBUS_CHAN_DEFINE(sensors_data_update
       delay_handler1_lis
       ,delay_handler2_lis
       ,delay_handler3_lis
+      ,delay_handler4_lis
       )
     ,ZBUS_MSG_INIT(0));
 
@@ -200,6 +245,13 @@ static int init_modbus_client(void){
   return modbus_init_client(client_iface,client_accu_iface);
 }
 
+enum run_state{
+  k_debug
+  ,k_run
+};
+
+static enum run_state rs = k_debug;
+
 static int coil_rd(uint16_t addr, bool* state){
   LOG_INF("todo");
   return 0;
@@ -213,8 +265,11 @@ static int coil_wr(uint16_t addr, bool state){
 
 
 static int registers_read(uint16_t addr, uint16_t* reg){
-  *reg = modbus_registers[addr];
-  LOG_INF("registers_read, addr %u",addr);
+  if (rs==k_debug)
+    *reg = modbus_registers[addr];
+  else if(rs==k_run)
+    *reg = monitor.data[addr];
+  //LOG_INF("registers_read, addr %u",addr);
   return 0;
 }
 
@@ -223,6 +278,8 @@ static int registers_write(uint16_t addr, uint16_t value){
     case(SET_LED):
       if (value==0) gpio_pin_configure_dt(&led,GPIO_OUTPUT_INACTIVE);
       else if (value==1) gpio_pin_configure_dt(&led,GPIO_OUTPUT_ACTIVE);
+      else if (value==2) rs==k_debug;
+      else if (value==3) rs==k_run;
       modbus_registers[0] = value;
       break;
     case(MODBUS_SEVER_FC_TEMP):
@@ -317,7 +374,6 @@ static int registers_write(uint16_t addr, uint16_t value){
     case(MODBUS_SEVER_FC_SET_SM):
       LOG_INF("MODBUS_SEVER_FC_SET_SM, value: %d",value);
       pwm_set_pulse_dt(&servo_st,PWM_USEC(value/2));
-      k_msleep(1000);
       //modbus_registers[19] = value;
       //if (pwm_set_pulse_dt(&servo_st,value/2)<0){
       //  LOG_ERR("servo_motor's pluse be set to %ld failed",PWM_USEC(value/2));
@@ -375,7 +431,22 @@ static const struct device* get_bmp280_device(void){
   if (!device_is_ready(dev)){
     LOG_ERR("device %s is not ready",dev->name);
     return NULL; }
-  LOG_INF("found device %s [OK]",dev->name);
+  return dev;
+#endif
+}
+static const struct device* get_aht20_device(void){
+#if !DT_NODE_HAS_STATUS(DT_NODELABEL(i2c1),okay)
+# pragma message "i2c1 node has been unable, sensor unable too"
+  LOG_INF("i2c1 unable");
+  return NULL;
+#else
+  const struct device* const dev = DEVICE_DT_GET_ANY(aosong_aht20);
+  //if (dev==NULL){
+  //  LOG_ERR("sensor get failed");
+  //  return NULL; }
+  //if (!device_is_ready(dev)){
+  //  LOG_ERR("device %s is not ready",dev->name);
+  //  return NULL; }
   return dev;
 #endif
 }
@@ -438,7 +509,8 @@ static int trans_to_dump_mode(){
 
 static int self_cycle_mode(){
 
-  LOG_INF("Poll Mode!");
+  LOG_INF("self cycle mode!");
+  rs = k_run;
 
   size_t i = 1;
   while(1){
@@ -519,6 +591,12 @@ int main(void){
     modbus_registers[14] |= 0b00001000;
   }
 
+  aht20 = get_aht20_device(); //TODO 
+  if (aht20==NULL){
+    LOG_ERR("sensor aht20 initialization failed");
+    return 0;
+  }
+
   if (init_modbus_client()){
     LOG_ERR("modbus rtu client initialization failed"); 
     return -1;
@@ -532,9 +610,10 @@ int main(void){
   //LOG_INF("modbus rtu server initialization ok");
   modbus_registers[14] |= 0b01000000;
 
-  k_work_init(&wq_handler1.work,wq_dh_cb);
-  k_work_init(&wq_handler2.work,wq_dh_cb);
-  k_work_init(&wq_handler3.work,wq_dh_cb);
+  k_work_init(&wq_handler1.work,wq_dh_cb1);
+  k_work_init(&wq_handler2.work,wq_dh_cb2);
+  k_work_init(&wq_handler3.work,wq_dh_cb3);
+  k_work_init(&wq_handler4.work,wq_dh_cb4);
 
   k_msleep(200);
   uint16_t digit_mode_command[2] = {0x0000,0x41D0};
