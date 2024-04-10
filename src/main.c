@@ -616,6 +616,7 @@ int main(void){
   k_work_init(&wq_handler4.work,wq_dh_cb4);
 
   k_msleep(1000);
+
   uint16_t digit_mode_command[2] = {0x0000,0x41D0};
   if (modbus_write_holding_regs(client_iface,1,0x0074,digit_mode_command,2)!=0){
     LOG_ERR("set flowmeter mode as 'digit"); 
