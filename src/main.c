@@ -74,6 +74,8 @@ struct k_timer timer_period;
 
 #define MODBUS_SEVER_FC_SET_VSWITCH 0x0012
 #define MODBUS_SEVER_FC_SET_SM 0x0013
+#define SET_PERIOD_DUMP 0x0014
+#define SET_PERIOD_RECYCLE 0x0015
 
 #define READ_CURRENT_FLOW 0x0000
 #define READ_TOTAL_FLOW 0x0001
@@ -381,7 +383,11 @@ static int registers_write(uint16_t addr, uint16_t value){
       //}
       //pwm_set_pulse_dt(&servo_st,50);
       LOG_INF("servo_motor's pluse be set to %ld ok",PWM_USEC(value/2));
-    break;
+      break;
+    case(SET_PERIOD_DUMP):
+    case(SET_PERIOD_RECYCLE):
+      modbus_registers[addr] = value;
+      break;
     default:
       LOG_INF("unknow command %d",addr);
       break;
@@ -514,23 +520,25 @@ static int self_cycle_mode(){
 
   size_t i = 1;
   while(1){
-    LOG_INF("period %d start" ,i++);
+    uint16_t dt = modbus_registers[SET_PERIOD_DUMP];
+    uint16_t rt = modbus_registers[SET_PERIOD_RECYCLE];
+    LOG_INF("period %d start, dump: %d, recycle: %d" ,i++,dt,rt);
 
     int ec = trans_to_dump_mode();
     if (ec != 0){
       LOG_WRN("%d loop, Failed in 'trans_to_dump_mode'", i);
       continue;
     }
-    LOG_INF("===> dump mode");
+    //LOG_INF("===> dump mode");
 
-    k_msleep(60*1000);
+    k_msleep(dt);
     ec = trans_to_recycle_mode();
     if (ec != 0){
       LOG_WRN("%d loop, Failed in 'trans_to_recycle_mode'", i);
       continue;
     }
-    LOG_INF("===> recycle mode");
-    k_msleep(240*1000);
+    //LOG_INF("===> recycle mode");
+    k_msleep(rt);
   }
   return 0;
 }
@@ -562,6 +570,9 @@ int main(void){
   for (size_t i=0; i<32; i++) modbus_registers[i] = 0x00;
   modbus_registers[10] = modbus_registers[11] = 0xFFFF;
   modbus_registers[12] = modbus_registers[13] = 0xFFFF;
+
+  modbus_registers[SET_PERIOD_DUMP] = 30000;
+  modbus_registers[SET_PERIOD_RECYCLE] = 30000;
   if (!gpio_is_ready_dt(&led)){
     LOG_ERR("gpio8 output led ready failed");
     return -1;
@@ -615,11 +626,14 @@ int main(void){
   k_work_init(&wq_handler3.work,wq_dh_cb3);
   k_work_init(&wq_handler4.work,wq_dh_cb4);
 
-  k_msleep(200);
+  k_msleep(2000);
   uint16_t digit_mode_command[2] = {0x0000,0x41D0};
   if (modbus_write_holding_regs(client_iface,1,0x0074,digit_mode_command,2)!=0){
-    LOG_ERR("set flowmeter mode as 'digit"); 
-    return -1;
+    k_msleep(2000);
+    if (modbus_write_holding_regs(client_iface,1,0x0074,digit_mode_command,2)!=0){
+      LOG_ERR("set flowmeter mode as 'digit"); 
+      return -1;
+    }
   }
   modbus_registers[14] |= 0b10000000;
   LOG_INF("set flowmeter mode as 'digit'");
