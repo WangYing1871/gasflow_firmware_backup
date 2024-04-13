@@ -16,7 +16,7 @@
 #include <unistd.h>
 #include <pthread.h>
 
-LOG_MODULE_REGISTER(demo_version,LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(GFC,LOG_LEVEL_INF);
 static uint16_t modbus_registers[64];
 static uint8_t __attribute__((unused)) modbus_coils;
 
@@ -140,7 +140,7 @@ void peripheral_thread(void){
     //for (int i=0; i<3; ++i) sm.pressure[i]++;
     //for (int i=0; i<3; ++i) sm.humidity[i]++;
     zbus_chan_pub(&sensors_data_update,&sm,K_MSEC(200));
-    k_msleep(2000);
+    k_msleep(250);
 
   }
 
