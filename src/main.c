@@ -116,21 +116,21 @@ static struct sensors_msg monitor = {0};
 #include <zephyr/zbus/zbus.h>
 ZBUS_CHAN_DECLARE(sensors_data_update);
 void peripheral_thread(void){
-  struct sensors_msg sm = {0};
+  //struct sensors_msg sm = {0};
   while(1){
     struct sensor_value value;
     sensor_sample_fetch(bmp280);
     sensor_channel_get(bmp280,SENSOR_CHAN_AMBIENT_TEMP,&value);
-    sm.data[0] = value.val1;
-    sm.data[1] = (uint16_t)(value.val2>>16);
-    sm.data[2] = (uint16_t)(value.val2 & 0xFFFF);
+    monitor.data[0] = value.val1;
+    monitor.data[1] = (uint16_t)(value.val2>>16);
+    monitor.data[2] = (uint16_t)(value.val2 & 0xFFFF);
     k_msleep(10);
     sensor_channel_get(bmp280,SENSOR_CHAN_PRESS,&value);
-    sm.data[3] = value.val1;
-    sm.data[4] = (uint16_t)(value.val2>>16);
-    sm.data[5] = (uint16_t)(value.val2 & 0xFFFF);
+    monitor.data[3] = value.val1;
+    monitor.data[4] = (uint16_t)(value.val2>>16);
+    monitor.data[5] = (uint16_t)(value.val2 & 0xFFFF);
     k_msleep(30);
-    modbus_read_holding_regs(client_iface,1,0x0010,sm.data+11,2);
+    modbus_read_holding_regs(client_iface,1,0x0010,monitor.data+11,2);
 
     //LOG_INF("my_thread");
     //LOG_INF("my thread. bmp: %d",POINTER_TO_INT(bmp280));
@@ -139,8 +139,8 @@ void peripheral_thread(void){
     //for (int i=0; i<3; ++i) sm.temprature[i]++;
     //for (int i=0; i<3; ++i) sm.pressure[i]++;
     //for (int i=0; i<3; ++i) sm.humidity[i]++;
-    zbus_chan_pub(&sensors_data_update,&sm,K_MSEC(200));
-    k_msleep(250);
+    //zbus_chan_pub(&sensors_data_update,&sm,K_MSEC(200));
+    k_msleep(300);
 
   }
 
@@ -191,7 +191,7 @@ static void wq_dh_cb4(struct k_work* item){
 
 }
 
-
+ 
 
 
 
@@ -520,25 +520,29 @@ static int self_cycle_mode(){
 
   size_t i = 1;
   while(1){
+    int ec;
     uint16_t dt = modbus_registers[SET_PERIOD_DUMP];
     uint16_t rt = modbus_registers[SET_PERIOD_RECYCLE];
     LOG_INF("period %d start, dump: %d, recycle: %d" ,i++,dt,rt);
 
-    int ec = trans_to_dump_mode();
-    if (ec != 0){
-      LOG_WRN("%d loop, Failed in 'trans_to_dump_mode'", i);
-      continue;
+    if (dt==0){
+    }else{
+      ec = trans_to_dump_mode();
+      if (ec != 0){
+        LOG_WRN("%d loop, Failed in 'trans_to_dump_mode'", i);
+        continue;
+      }
+      k_msleep(dt*1000);
     }
-    //LOG_INF("===> dump mode");
-
-    k_msleep(dt);
-    ec = trans_to_recycle_mode();
-    if (ec != 0){
-      LOG_WRN("%d loop, Failed in 'trans_to_recycle_mode'", i);
-      continue;
+    if(rt==0){
+    }else{
+      ec = trans_to_recycle_mode();
+      if (ec != 0){
+        LOG_WRN("%d loop, Failed in 'trans_to_recycle_mode'", i);
+        continue;
+      }
+      k_msleep(rt*1000);
     }
-    //LOG_INF("===> recycle mode");
-    k_msleep(rt);
   }
   return 0;
 }
@@ -571,8 +575,8 @@ int main(void){
   modbus_registers[10] = modbus_registers[11] = 0xFFFF;
   modbus_registers[12] = modbus_registers[13] = 0xFFFF;
 
-  modbus_registers[SET_PERIOD_DUMP] = 30000;
-  modbus_registers[SET_PERIOD_RECYCLE] = 30000;
+  modbus_registers[SET_PERIOD_DUMP] = 30;
+  modbus_registers[SET_PERIOD_RECYCLE] = 30;
   if (!gpio_is_ready_dt(&led)){
     LOG_ERR("gpio8 output led ready failed");
     return -1;
@@ -621,10 +625,10 @@ int main(void){
   //LOG_INF("modbus rtu server initialization ok");
   modbus_registers[14] |= 0b01000000;
 
-  k_work_init(&wq_handler1.work,wq_dh_cb1);
-  k_work_init(&wq_handler2.work,wq_dh_cb2);
-  k_work_init(&wq_handler3.work,wq_dh_cb3);
-  k_work_init(&wq_handler4.work,wq_dh_cb4);
+  //k_work_init(&wq_handler1.work,wq_dh_cb1);
+  //k_work_init(&wq_handler2.work,wq_dh_cb2);
+  //k_work_init(&wq_handler3.work,wq_dh_cb3);
+  //k_work_init(&wq_handler4.work,wq_dh_cb4);
 
   k_msleep(2000);
   uint16_t digit_mode_command[2] = {0x0000,0x41D0};
