@@ -45,11 +45,11 @@
     status = "okay";
   };
 
-  aht20_tp@38{
-    compatible = "aosong,aht20";
-    reg = <0x38>;
-    status = "okay";
-  };
+  //aht20_tp@38{
+  //  compatible = "aosong,aht20";
+  //  reg = <0x38>;
+  //  status = "okay";
+  //};
 
 };
 

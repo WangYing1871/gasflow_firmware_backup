@@ -1,5 +1,9 @@
-cmake_minimum_required(VERSION 3.20.0)
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(micro_flow_controller)
-target_sources(app PRIVATE src/main.c)
-target_include_directories(app PRIVATE ${ZEPHYR_BASE}/lib/posix/options)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.20.0)
+
+FIND_PACKAGE(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+
+PROJECT(micro_flow_controller)
+
+FILE(GLOB app_sources src/*.c)
+                           
+TARGET_SOURCES(app PRIVATE ${app_sources})
